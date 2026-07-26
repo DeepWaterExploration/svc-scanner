@@ -13,22 +13,6 @@
 
 #include "../include/mdns.h"
 
-// Data for our service including the mDNS records
-typedef struct {
-	mdns_string_t service;
-	mdns_string_t hostname;
-	mdns_string_t service_instance;
-	mdns_string_t hostname_qualified;
-	struct sockaddr_in address_ipv4;
-	struct sockaddr_in6 address_ipv6;
-	int port;
-	mdns_record_t record_ptr;
-	mdns_record_t record_srv;
-	mdns_record_t record_a;
-	mdns_record_t record_aaaa;
-	mdns_record_t txt_record[2];
-} service_t;
-
 static mdns_string_t
 ipv4_address_to_string(char* buffer, size_t capacity, const struct sockaddr_in* addr,
                        size_t addrlen) {
@@ -80,10 +64,9 @@ ip_address_to_string(char* buffer, size_t capacity, const struct sockaddr* addr,
 	return ipv4_address_to_string(buffer, capacity, (const struct sockaddr_in*)addr, addrlen);
 }
 
-
 // Open sockets for sending one-shot multicast queries from an ephemeral port
 static int
-open_client_sockets(int* sockets, int max_sockets, int port, int *has_ipv4, int *has_ipv6) {
+open_client_sockets(int* sockets, int* adapter_indices, int max_sockets, int port, int *has_ipv4, int *has_ipv6) {
 	// When sending, each socket can only send to one network interface
 	// Thus we need to open one socket for each interface and address family
 	int num_sockets = 0;
@@ -97,6 +80,7 @@ open_client_sockets(int* sockets, int max_sockets, int port, int *has_ipv4, int 
 	ULONG address_size = 8000;
 	unsigned int ret;
 	unsigned int num_retries = 4;
+
 	do {
 		adapter_address = (IP_ADAPTER_ADDRESSES*)malloc(address_size);
 		ret = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_ANYCAST, 0,
@@ -124,6 +108,8 @@ open_client_sockets(int* sockets, int max_sockets, int port, int *has_ipv4, int 
 		if (adapter->OperStatus != IfOperStatusUp)
 			continue;
 
+		// A lot of code duplication here
+
 		for (IP_ADAPTER_UNICAST_ADDRESS* unicast = adapter->FirstUnicastAddress; unicast;
 		     unicast = unicast->Next) {
 			if (unicast->Address.lpSockaddr->sa_family == AF_INET) {
@@ -138,12 +124,13 @@ open_client_sockets(int* sockets, int max_sockets, int port, int *has_ipv4, int 
 						first_ipv4 = 0;
 						log_addr = 1;
 					}
-					has_ipv4 = 1;
+					*has_ipv4 = 1;
 					if (num_sockets < max_sockets) {
 						saddr->sin_port = htons((unsigned short)port);
 						int sock = mdns_socket_open_ipv4(saddr);
 						if (sock >= 0) {
 							sockets[num_sockets++] = sock;
+							adapter_indices[num_sockets-1] = adapter->IfIndex;
 							log_addr = 1;
 						} else {
 							log_addr = 0;
@@ -174,12 +161,13 @@ open_client_sockets(int* sockets, int max_sockets, int port, int *has_ipv4, int 
 						first_ipv6 = 0;
 						log_addr = 1;
 					}
-					has_ipv6 = 1;
+					*has_ipv6 = 1;
 					if (num_sockets < max_sockets) {
 						saddr->sin6_port = htons((unsigned short)port);
 						int sock = mdns_socket_open_ipv6(saddr);
 						if (sock >= 0) {
 							sockets[num_sockets++] = sock;
+							adapter_indices[num_sockets-1] = adapter->IfIndex;
 							log_addr = 1;
 						} else {
 							log_addr = 0;
