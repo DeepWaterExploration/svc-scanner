@@ -1,7 +1,6 @@
 #include "mdns.h"
-#include <sys/socket.h>
 
-#ifdef __WIN32
+#ifdef _WIN32
 #include <Winsock2.h>
 #include <ifdef.h>
 #include <inaddr.h>
@@ -17,6 +16,7 @@
 #include <netdb.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/socket.h>
 #endif
 
 #include <cstring>
