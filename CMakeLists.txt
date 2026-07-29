@@ -9,4 +9,8 @@ add_executable(svc-scanner ${CPP_SOURCES})
 
 target_compile_features(svc-scanner PRIVATE cxx_std_17)
 target_include_directories(svc-scanner PRIVATE include)
-target_link_libraries(svc-scanner ws2_32 iphlpapi)
+
+IF (WIN32)
+  target_link_libraries(svc-scanner ws2_32 iphlpapi)
+ELSE()
+ENDIF()

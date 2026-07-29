@@ -1,21 +1,31 @@
 #include "mdns.h"
+#include <sys/socket.h>
 
+#ifdef __WIN32
 #include <Winsock2.h>
-#include <cstring>
 #include <ifdef.h>
 #include <inaddr.h>
-#include <iostream>
 #include <iphlpapi.h>
 #include <iptypes.h>
-#include <map>
 #include <nldef.h>
+#include <wincrypt.h>
+#include <winerror.h>
+#include <ws2ipdef.h>
+#else
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netdb.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#endif
+
+#include <cstring>
+#include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <variant>
 #include <vector>
-#include <wincrypt.h>
-#include <winerror.h>
-#include <ws2ipdef.h>
 
 // Equivalent of mdns_query_t using std::string
 struct MdnsQuery {
@@ -80,7 +90,8 @@ bool IsIpV6LL(sockaddr_in6 *addr) {
 }
 
 std::string ip_address_to_string(const struct sockaddr *addr,
-                                 unsigned short port, size_t addrlen, unsigned int adapter_index=-1) {
+                                 unsigned short port, size_t addrlen,
+                                 unsigned int adapter_index = -1) {
   std::stringstream str;
 
   char host[NI_MAXHOST] = {0};
@@ -97,17 +108,20 @@ std::string ip_address_to_string(const struct sockaddr *addr,
   host_ss << host;
 
   if (addr->sa_family == AF_INET6) {
-    auto ipv6_addr = ((sockaddr_in6*)addr);
+    auto ipv6_addr = ((sockaddr_in6 *)addr);
 
-    // Check if it's a link-local ip that is missing scope id (seems to happen in the AAAA records)
-    if (adapter_index >= 0 && !ipv6_addr->sin6_scope_id && IsIpV6LL(ipv6_addr)) {
+    // Check if it's a link-local ip that is missing scope id (seems to happen
+    // in the AAAA records)
+    if (adapter_index >= 0 && !ipv6_addr->sin6_scope_id &&
+        IsIpV6LL(ipv6_addr)) {
       host_ss << "%" << adapter_index;
     }
   }
 
   if (port != 0) {
     if (addr->sa_family == AF_INET6) {
-      str << "[" << host_ss.str() << "]" << ":" << service;
+      str << "[" << host_ss.str() << "]"
+          << ":" << service;
     } else if (addr->sa_family == AF_INET) {
       str << host_ss.str() << ":" << service;
     }
@@ -118,13 +132,17 @@ std::string ip_address_to_string(const struct sockaddr *addr,
   return str.str();
 }
 
-bool IsLoopback(LPSOCKADDR addr) {
+bool IsLoopback(const struct sockaddr *addr) {
   if (addr->sa_family == AF_INET) {
     struct sockaddr_in *saddr = (struct sockaddr_in *)addr;
+#ifdef _WIN32
     return (saddr->sin_addr.S_un.S_un_b.s_b1 == 127) &&
            (saddr->sin_addr.S_un.S_un_b.s_b2 == 0) &&
            (saddr->sin_addr.S_un.S_un_b.s_b3 == 0) &&
            (saddr->sin_addr.S_un.S_un_b.s_b4 == 1);
+#else
+    return saddr->sin_addr.s_addr == htonl(INADDR_LOOPBACK);
+#endif
   } else if (addr->sa_family == AF_INET6) {
     struct sockaddr_in6 *saddr = (struct sockaddr_in6 *)addr;
     static const unsigned char localhost[] = {0, 0, 0, 0, 0, 0, 0, 0,
@@ -137,6 +155,14 @@ bool IsLoopback(LPSOCKADDR addr) {
   }
   return false;
 }
+
+#ifndef _WIN32
+static bool IsBridgeInterface(const std::string &name) {
+  std::string path = "/sys/class/net/" + name + "/bridge";
+  struct stat st;
+  return stat(path.c_str(), &st) == 0;
+}
+#endif
 
 std::string ToString(mdns_string_t str) {
   // copy into string
@@ -207,6 +233,7 @@ MdnsClient::~MdnsClient() {
 std::vector<MdnsQueryResult> MdnsClient::records() const { return records_; }
 
 void MdnsClient::OpenSockets_() {
+#ifdef _WIN32
   IP_ADAPTER_ADDRESSES *adapter_address = 0;
 
   ULONG address_size = 15000;
@@ -299,6 +326,71 @@ void MdnsClient::OpenSockets_() {
     }
     // std::cout << "\n";
   }
+#else
+  struct ifaddrs *ifaddr = 0;
+  struct ifaddrs *ifa = 0;
+
+  if (getifaddrs(&ifaddr) < 0) {
+    std::cerr << "Failed to get interface addresses!" << std::endl;
+    return;
+  }
+
+  for (ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+    if (!ifa->ifa_addr)
+      continue;
+    if (!(ifa->ifa_flags & IFF_UP) || !(ifa->ifa_flags & IFF_MULTICAST))
+      continue;
+    if ((ifa->ifa_flags & IFF_LOOPBACK) || (ifa->ifa_flags & IFF_POINTOPOINT))
+      continue;
+
+    if (IsLoopback(ifa->ifa_addr) || IsBridgeInterface(ifa->ifa_name))
+      continue;
+
+    std::string addr_str = "";
+
+    AdapterInfo info;
+    info.index = if_nametoindex(ifa->ifa_name);
+    info.name = ifa->ifa_name;
+
+    if (ifa->ifa_addr->sa_family == AF_INET) {
+      struct sockaddr_in *saddr = (struct sockaddr_in *)ifa->ifa_addr;
+      saddr->sin_port = 0;
+      int sock = mdns_socket_open_ipv4(saddr);
+
+      if (sock >= 0) {
+        Socket socket_info;
+        socket_info.isock = sock;
+        socket_info.adapter = info;
+        sockets_.push_back(socket_info);
+      }
+
+      addr_str = ip_address_to_string(ifa->ifa_addr, saddr->sin_port,
+                                      sizeof(sockaddr_in));
+    } else if (ifa->ifa_addr->sa_family == AF_INET6) {
+      struct sockaddr_in6 *saddr = (struct sockaddr_in6 *)ifa->ifa_addr;
+      saddr->sin6_port = 0;
+      int sock = mdns_socket_open_ipv6(saddr);
+
+      if (sock >= 0) {
+        Socket socket_info;
+        socket_info.isock = sock;
+        socket_info.adapter = info;
+        sockets_.push_back(socket_info);
+      }
+
+      addr_str = ip_address_to_string(ifa->ifa_addr, saddr->sin6_port,
+                                      sizeof(sockaddr_in6));
+    } else {
+      continue; // ignore AF_PACKET
+    }
+
+    std::cout << "Adapter:\n";
+    std::wcout << " friendly name: " << ifa->ifa_name << std::endl;
+    std::cout << " - " << addr_str << std::endl;
+  }
+  std::cout << "\n";
+
+#endif
 }
 
 int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
@@ -364,8 +456,8 @@ int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
     struct sockaddr_in6 addr;
     mdns_record_parse_aaaa(data, size, record_offset, record_length, &addr);
     // Include the adapter index for the case of ipv6ll
-    std::string addr_str =
-        ip_address_to_string((sockaddr *)&addr, 0, sizeof(addr), sock.adapter.index);
+    std::string addr_str = ip_address_to_string(
+        (sockaddr *)&addr, 0, sizeof(addr), sock.adapter.index);
 
     MdnsAAAAResult result;
     result.addr = addr_str;
