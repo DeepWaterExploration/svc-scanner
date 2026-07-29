@@ -1,6 +1,6 @@
 
-#include <Winsock2.h>
 #ifdef _WIN32
+#include <Winsock2.h>
 #define _CRT_SECURE_NO_WARNINGS 1
 #endif
 
@@ -178,7 +178,6 @@ static int send_mdns_query(mdns_query_t* query, size_t count) {
 	printf("Read %d records\n", records);
 
 	free(buffer);
-	free(socket_indices);
 
 	for (int isock = 0; isock < num_sockets; ++isock)
 		mdns_socket_close(sockets[isock]);
