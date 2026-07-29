@@ -7,7 +7,7 @@
 #include <iostream>
 #include <iphlpapi.h>
 #include <iptypes.h>
-#include <istream>
+#include <map>
 #include <nldef.h>
 #include <sstream>
 #include <string>
@@ -25,11 +25,11 @@ struct MdnsQuery {
 
 // Represents a single result to an mdns query
 struct MdnsAResult {
-  in_addr addr;
+  std::string addr;
 };
 
 struct MdnsAAAAResult {
-  in6_addr addr;
+  std::string addr;
 };
 
 struct MdnsPtrResult {
@@ -44,8 +44,7 @@ struct MdnsSrvResult {
 };
 
 struct MdnsTxtResult {
-  std::string key;
-  std::string value;
+  std::map<std::string, std::string> txt_records;
 };
 
 struct AdapterInfo {
@@ -58,20 +57,27 @@ struct Socket {
   AdapterInfo adapter;
 };
 
+using MdnsRecordData = std::variant<MdnsAResult, MdnsAAAAResult, MdnsPtrResult,
+                                    MdnsSrvResult, MdnsTxtResult>;
+
 struct MdnsQueryResult {
   Socket socket;
   int socket_index;
   mdns_record_type_t type;
   std::string name; // the record name this result answers for
   uint32_t ttl;
-  std::variant<MdnsAResult, MdnsAAAAResult, MdnsPtrResult, MdnsSrvResult,
-               MdnsTxtResult>
-      data;
+  MdnsRecordData data;
   std::string from_addr; // TODO: make custom ip class
 };
 
+bool IsIpV6LL(sockaddr_in6 *addr) {
+  // Link-Local prefix FE80::/10 (1111 1110 10)
+  const uint8_t *b = addr->sin6_addr.s6_addr;
+  return (b[0] == 0xFE && (b[1] & 0xC0) == 0x80);
+}
+
 std::string ip_address_to_string(const struct sockaddr *addr,
-                                 unsigned short port, size_t addrlen) {
+                                 unsigned short port, size_t addrlen, unsigned int adapter_index=-1) {
   std::stringstream str;
 
   char host[NI_MAXHOST] = {0};
@@ -84,14 +90,26 @@ std::string ip_address_to_string(const struct sockaddr *addr,
     return "";
   }
 
+  std::stringstream host_ss;
+  host_ss << host;
+
+  if (addr->sa_family == AF_INET6) {
+    auto ipv6_addr = ((sockaddr_in6*)addr);
+
+    // Check if it's a link-local ip that is missing scope id (seems to happen in the AAAA records)
+    if (adapter_index >= 0 && !ipv6_addr->sin6_scope_id && IsIpV6LL(ipv6_addr)) {
+      host_ss << "%" << adapter_index;
+    }
+  }
+
   if (port != 0) {
     if (addr->sa_family == AF_INET6) {
-      str << "[" << host << "]" << ":" << service;
+      str << "[" << host_ss.str() << "]" << ":" << service;
     } else if (addr->sa_family == AF_INET) {
-      str << host << ":" << service;
+      str << host_ss.str() << ":" << service;
     }
   } else {
-    str << host;
+    str << host_ss.str();
   }
 
   return str.str();
@@ -115,6 +133,11 @@ bool IsLoopback(LPSOCKADDR addr) {
            !memcmp(saddr->sin6_addr.s6_addr, localhost_mapped, 16);
   }
   return false;
+}
+
+std::string ToString(mdns_string_t str) {
+  // copy into string
+  return std::string(str.str, str.length);
 }
 
 class MdnsClient {
@@ -284,10 +307,10 @@ int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
   std::string fromaddrstr = ip_address_to_string(from, 0, addrlen);
   char namebuffer[256];
   char entrybuffer[256];
+  static mdns_record_txt_t txtbuffer[128];
 
-  mdns_string_t entrystr = mdns_string_extract(
-      data, size, &name_offset, entrybuffer, sizeof(entrybuffer));
-  std::string entry_str(entrystr.str, entrystr.length);
+  std::string entry_str = ToString(mdns_string_extract(
+      data, size, &name_offset, entrybuffer, sizeof(entrybuffer)));
 
   Socket sock = sockets_[socket_index];
 
@@ -305,20 +328,64 @@ int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
     scope_id = saddr->sin6_scope_id;
   }
 
-  if (rtype == MDNS_RECORDTYPE_PTR) {
-    mdns_string_t namestr =
-        mdns_record_parse_ptr(data, size, record_offset, record_length,
-                              namebuffer, sizeof(namebuffer));
+  MdnsRecordData record_data;
 
-    std::string name_str(namestr.str, namestr.length);
+  if (rtype == MDNS_RECORDTYPE_PTR) {
+    std::string name_str =
+        ToString(mdns_record_parse_ptr(data, size, record_offset, record_length,
+                                       namebuffer, sizeof(namebuffer)));
 
     MdnsPtrResult result;
     result.name = name_str;
-
     record.data = result;
-    records_.push_back(record);
+    record_data = result;
+  } else if (rtype == MDNS_RECORDTYPE_SRV) {
+    mdns_record_srv_t srv =
+        mdns_record_parse_srv(data, size, record_offset, record_length,
+                              namebuffer, sizeof(namebuffer));
+    MdnsSrvResult result;
+    result.name = ToString(srv.name);
+    result.port = srv.port;
+    result.priority = srv.priority;
+    result.weight = srv.weight;
+    record_data = result;
   } else if (rtype == MDNS_RECORDTYPE_A) {
+    struct sockaddr_in addr;
+    mdns_record_parse_a(data, size, record_offset, record_length, &addr);
+    std::string addr_str =
+        ip_address_to_string((sockaddr *)&addr, 0, sizeof(addr));
+
+    MdnsAResult result;
+    result.addr = addr_str;
+    record_data = result;
+  } else if (rtype == MDNS_RECORDTYPE_AAAA) {
+    struct sockaddr_in6 addr;
+    mdns_record_parse_aaaa(data, size, record_offset, record_length, &addr);
+    // Include the adapter index for the case of ipv6ll
+    std::string addr_str =
+        ip_address_to_string((sockaddr *)&addr, 0, sizeof(addr), sock.adapter.index);
+
+    MdnsAAAAResult result;
+    result.addr = addr_str;
+    record_data = result;
+  } else if (rtype == MDNS_RECORDTYPE_TXT) {
+    MdnsTxtResult result;
+    size_t parsed = mdns_record_parse_txt(
+        data, size, record_offset, record_length, txtbuffer,
+        sizeof(txtbuffer) / sizeof(mdns_record_txt_t));
+    for (size_t itxt = 0; itxt < parsed; ++itxt) {
+      std::string key = ToString(txtbuffer[itxt].key);
+      std::string value =
+          txtbuffer[itxt].value.length ? ToString(txtbuffer[itxt].value) : "";
+      result.txt_records[key] = value;
+    }
+    record_data = result;
+  } else {
+    return 0;
   }
+
+  record.data = record_data;
+  records_.push_back(record);
 
   return 0;
 }
@@ -419,6 +486,26 @@ int main(int argc, char **argv) {
     case MDNS_RECORDTYPE_PTR:
       std::cout << "PTR: " << std::get<MdnsPtrResult>(record.data).name;
       break;
+    case MDNS_RECORDTYPE_SRV:
+      std::cout << "SRV: " << std::get<MdnsSrvResult>(record.data).name
+                << " at port " << std::get<MdnsSrvResult>(record.data).port
+                << " with priority "
+                << std::get<MdnsSrvResult>(record.data).priority;
+      break;
+    case MDNS_RECORDTYPE_A:
+      std::cout << "A: " << std::get<MdnsAResult>(record.data).addr;
+      break;
+    case MDNS_RECORDTYPE_AAAA:
+      std::cout << "AAAA: " << std::get<MdnsAAAAResult>(record.data).addr;
+      break;
+    case MDNS_RECORDTYPE_TXT: {
+      MdnsTxtResult result = std::get<MdnsTxtResult>(record.data);
+      std::cout << "TXT Records:" << std::endl;
+      for (const auto &[key, value] : result.txt_records) {
+        std::cout << "\t" << key << ": " << value << std::endl;
+      }
+      break;
+    }
     default:
       break;
     }
