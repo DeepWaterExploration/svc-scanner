@@ -25,12 +25,14 @@ struct HostNode {
 };
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
   WORD versionWanted = MAKEWORD(1, 1);
   WSADATA wsaData;
   if (WSAStartup(versionWanted, &wsaData)) {
     printf("Failed to initialize WinSock\n");
     return -1;
   }
+#endif
   MdnsClient client;
 
   client.Open();
@@ -108,5 +110,7 @@ int main(int argc, char **argv) {
     std::cout << "\n";
   }
 
+#ifdef _WIN32
   WSACleanup();
+#endif
 }
