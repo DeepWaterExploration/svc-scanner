@@ -17,16 +17,6 @@
 #include <winerror.h>
 #include <ws2ipdef.h>
 
-struct AdapterInfo {
-  std::string name;
-  unsigned int index;
-};
-
-struct Socket {
-  int isock;
-  AdapterInfo adapter;
-};
-
 // Equivalent of mdns_query_t using std::string
 struct MdnsQuery {
   mdns_record_type_t type;
@@ -58,14 +48,26 @@ struct MdnsTxtResult {
   std::string value;
 };
 
+struct AdapterInfo {
+  std::string name;
+  unsigned int index;
+};
+
+struct Socket {
+  int isock;
+  AdapterInfo adapter;
+};
+
 struct MdnsQueryResult {
-  AdapterInfo info;
+  Socket socket;
+  int socket_index;
   mdns_record_type_t type;
   std::string name; // the record name this result answers for
   uint32_t ttl;
   std::variant<MdnsAResult, MdnsAAAAResult, MdnsPtrResult, MdnsSrvResult,
                MdnsTxtResult>
       data;
+  std::string from_addr; // TODO: make custom ip class
 };
 
 std::string ip_address_to_string(const struct sockaddr *addr,
@@ -127,6 +129,8 @@ public:
 
   void SendQuery(std::string service);
 
+  std::vector<MdnsQueryResult> records() const;
+
   struct QueryResponseContext {
     MdnsClient *client;
     int socket_index;
@@ -134,6 +138,8 @@ public:
 
 private:
   std::vector<Socket> sockets_;
+
+  std::vector<MdnsQueryResult> records_;
 
   bool is_open_;
 
@@ -171,6 +177,8 @@ MdnsClient::~MdnsClient() {
     Close();
   }
 }
+
+std::vector<MdnsQueryResult> MdnsClient::records() const { return records_; }
 
 void MdnsClient::OpenSockets_() {
   IP_ADAPTER_ADDRESSES *adapter_address = 0;
@@ -273,11 +281,25 @@ int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
                                size_t size, size_t name_offset,
                                size_t record_offset, size_t record_length,
                                uint16_t socket_index) {
-  const auto fromaddrstr = ip_address_to_string(from, 0, addrlen);
+  std::string fromaddrstr = ip_address_to_string(from, 0, addrlen);
   char namebuffer[256];
+  char entrybuffer[256];
+
+  mdns_string_t entrystr = mdns_string_extract(
+      data, size, &name_offset, entrybuffer, sizeof(entrybuffer));
+  std::string entry_str(entrystr.str, entrystr.length);
+
+  Socket sock = sockets_[socket_index];
+
+  MdnsQueryResult record;
+  record.socket_index = socket_index;
+  record.ttl = ttl;
+  record.type = (mdns_record_type_t)rtype;
+  record.name = entry_str;
+  record.socket = sock;
+  record.from_addr = fromaddrstr;
 
   int scope_id = 0;
-
   if (from->sa_family == AF_INET6) {
     struct sockaddr_in6 *saddr = (struct sockaddr_in6 *)from;
     scope_id = saddr->sin6_scope_id;
@@ -290,9 +312,12 @@ int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
 
     std::string name_str(namestr.str, namestr.length);
 
-    Socket sock = sockets_[socket_index];
-    std::cout << "From: " << fromaddrstr << " (" << sock.adapter.name << ")"
-              << " - " << "PTR: " << name_str << std::endl;
+    MdnsPtrResult result;
+    result.name = name_str;
+
+    record.data = result;
+    records_.push_back(record);
+  } else if (rtype == MDNS_RECORDTYPE_A) {
   }
 
   return 0;
@@ -308,7 +333,7 @@ void MdnsClient::SendQuery(std::string service) {
   std::vector<uint8_t> buffer(2048);
 
   int nfds = 0;
-  size_t records = 0;
+  size_t total_records = 0;
 
   for (int i = 0; i < sockets_.size(); i++) {
     Socket socket = sockets_[i];
@@ -337,7 +362,7 @@ void MdnsClient::SendQuery(std::string service) {
       FD_SET(socket.isock, &readfs);
     }
 
-    records = 0;
+    total_records = 0;
     res = select(nfds, &readfs, 0, 0, &timeout);
     if (res > 0) {
       for (int i = 0; i < sockets_.size(); i++) {
@@ -346,7 +371,7 @@ void MdnsClient::SendQuery(std::string service) {
           ctx.client = this;
           ctx.socket_index = i;
 
-          records += mdns_query_recv(
+          int records = mdns_query_recv(
               sockets_[i].isock, buffer.data(), buffer.size(),
               [](int sock, const struct sockaddr *from, size_t addrlen,
                  mdns_entry_type_t entry, uint16_t query_id, uint16_t rtype,
@@ -362,11 +387,16 @@ void MdnsClient::SendQuery(std::string service) {
                 return 0;
               },
               (void *)&ctx, query_ids[i]);
+          total_records += records;
+          std::cout << "Received " << records
+                    << " records for interface: " << sockets_[i].adapter.name
+                    << std::endl;
         }
         FD_SET(sockets_[i].isock, &readfs);
       }
     }
   } while (res > 0);
+  std::cout << std::endl;
 }
 
 int main(int argc, char **argv) {
@@ -380,6 +410,20 @@ int main(int argc, char **argv) {
 
   client.Open();
   client.SendQuery("_dweos._tcp.local");
+
+  std::vector<MdnsQueryResult> records = client.records();
+  for (MdnsQueryResult record : records) {
+    std::cout << "From: " << record.from_addr << " ("
+              << record.socket.adapter.name << ") - ";
+    switch (record.type) {
+    case MDNS_RECORDTYPE_PTR:
+      std::cout << "PTR: " << std::get<MdnsPtrResult>(record.data).name;
+      break;
+    default:
+      break;
+    }
+    std::cout << std::endl;
+  }
 
   WSACleanup();
 }
