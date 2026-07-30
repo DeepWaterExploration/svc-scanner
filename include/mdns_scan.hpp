@@ -275,6 +275,10 @@ void MdnsClient::OpenSockets_() {
     // std::wcout << " friendly name: " << adapter->FriendlyName << std::endl;
     // std::cout << " addresses: " << std::endl;
 
+    AdapterInfo info;
+    std::wstring ws(adapter->FriendlyName);
+    info.name = std::string(ws.begin(), ws.end());
+
     for (IP_ADAPTER_UNICAST_ADDRESS* unicast = adapter->FirstUnicastAddress;
          unicast; unicast = unicast->Next) {
       if (IsLoopback(unicast->Address.lpSockaddr))
@@ -288,10 +292,7 @@ void MdnsClient::OpenSockets_() {
 
         int sock = mdns_socket_open_ipv4(saddr);
 
-        AdapterInfo info;
         info.index = adapter->IfIndex;
-        std::wstring ws(adapter->FriendlyName);
-        info.name = std::string(ws.begin(), ws.end());
 
         if (sock >= 0) {
           Socket socket_info;
@@ -308,17 +309,18 @@ void MdnsClient::OpenSockets_() {
         if (unicast->DadState != NldsPreferred)
           continue;
 
+        info.index = adapter->Ipv6IfIndex;
+
         struct sockaddr_in6* saddr =
             (struct sockaddr_in6*)unicast->Address.lpSockaddr;
-        // TODO: Fix scope_id bug on windows
+        // Windows seems to properly set the sin6 scope id by default
+        // Assign scope id, if it's required
+        if (!saddr->sin6_scope_id && IsIpV6LL(saddr)) {
+          saddr->sin6_scope_id = info.index;
+        }
 
         saddr->sin6_port = 0;
         int sock = mdns_socket_open_ipv6(saddr);
-
-        AdapterInfo info;
-        info.index = adapter->Ipv6IfIndex;
-        std::wstring ws(adapter->FriendlyName);
-        info.name = std::string(ws.begin(), ws.end());
 
         if (sock >= 0) {
           Socket socket_info;
