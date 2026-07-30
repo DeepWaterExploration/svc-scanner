@@ -6,6 +6,8 @@
 
 namespace dwe {
 
+enum class IpType { IP4, IP6 };
+
 struct ServiceInstance {
   std::string instance_name;  // e.g. dwesvc-SN90001._dweos._tcp.local.
 
@@ -16,6 +18,7 @@ struct ServiceInstance {
 struct IpRecord {
   MdnsMetaData meta;    // the metadata of the record
   std::string ip_addr;  // the parsed string of the ip record
+  IpType type;          // the IP type (V4, V6)
 };
 
 struct HostNode {
@@ -55,12 +58,14 @@ inline std::map<std::string, HostNode> ParseHosts(
       IpRecord ip_record;
       ip_record.ip_addr = a_record.addr;
       ip_record.meta = record.meta;
+      ip_record.type = IpType::IP4;
       hosts[record.meta.name].ip_records.push_back(ip_record);
     } else if (record.meta.type == MDNS_RECORDTYPE_AAAA) {
       const auto& aaaa_record = std::get<MdnsAAAAResult>(record.data);
       IpRecord ip_record;
       ip_record.ip_addr = aaaa_record.addr;
       ip_record.meta = record.meta;
+      ip_record.type = IpType::IP6;
       hosts[record.meta.name].ip_records.push_back(ip_record);
     }
   }
