@@ -1,3 +1,6 @@
+#ifndef MDNS_SCAN_HPP
+#define MDNS_SCAN_HPP
+
 #include "mdns.h"
 
 #ifdef _WIN32
@@ -14,9 +17,9 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netdb.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <sys/socket.h>
 #endif
 
 #include <cstring>
@@ -27,6 +30,7 @@
 #include <variant>
 #include <vector>
 
+namespace dwe {
 // Equivalent of mdns_query_t using std::string
 struct MdnsQuery {
   mdns_record_type_t type;
@@ -73,9 +77,9 @@ using MdnsRecordData = std::variant<MdnsAResult, MdnsAAAAResult, MdnsPtrResult,
 struct MdnsMetaData {
   AdapterInfo adapter;
   mdns_record_type_t type;
-  std::string name; // the record name this result answers for
+  std::string name;  // the record name this result answers for
   uint32_t ttl;
-  std::string from_addr; // TODO: make custom ip class
+  std::string from_addr;  // TODO: make custom ip class
 };
 
 struct MdnsQueryResult {
@@ -83,13 +87,13 @@ struct MdnsQueryResult {
   MdnsRecordData data;
 };
 
-bool IsIpV6LL(sockaddr_in6 *addr) {
+bool IsIpV6LL(sockaddr_in6* addr) {
   // Link-Local prefix FE80::/10 (1111 1110 10)
-  const uint8_t *b = addr->sin6_addr.s6_addr;
+  const uint8_t* b = addr->sin6_addr.s6_addr;
   return (b[0] == 0xFE && (b[1] & 0xC0) == 0x80);
 }
 
-std::string ip_address_to_string(const struct sockaddr *addr,
+std::string ip_address_to_string(const struct sockaddr* addr,
                                  unsigned short port, size_t addrlen,
                                  unsigned int adapter_index = -1) {
   std::stringstream str;
@@ -108,7 +112,7 @@ std::string ip_address_to_string(const struct sockaddr *addr,
   host_ss << host;
 
   if (addr->sa_family == AF_INET6) {
-    auto ipv6_addr = ((sockaddr_in6 *)addr);
+    auto ipv6_addr = ((sockaddr_in6*)addr);
 
     // Check if it's a link-local ip that is missing scope id (seems to happen
     // in the AAAA records)
@@ -132,9 +136,9 @@ std::string ip_address_to_string(const struct sockaddr *addr,
   return str.str();
 }
 
-bool IsLoopback(const struct sockaddr *addr) {
+bool IsLoopback(const struct sockaddr* addr) {
   if (addr->sa_family == AF_INET) {
-    struct sockaddr_in *saddr = (struct sockaddr_in *)addr;
+    struct sockaddr_in* saddr = (struct sockaddr_in*)addr;
 #ifdef _WIN32
     return (saddr->sin_addr.S_un.S_un_b.s_b1 == 127) &&
            (saddr->sin_addr.S_un.S_un_b.s_b2 == 0) &&
@@ -144,7 +148,7 @@ bool IsLoopback(const struct sockaddr *addr) {
     return saddr->sin_addr.s_addr == htonl(INADDR_LOOPBACK);
 #endif
   } else if (addr->sa_family == AF_INET6) {
-    struct sockaddr_in6 *saddr = (struct sockaddr_in6 *)addr;
+    struct sockaddr_in6* saddr = (struct sockaddr_in6*)addr;
     static const unsigned char localhost[] = {0, 0, 0, 0, 0, 0, 0, 0,
                                               0, 0, 0, 0, 0, 0, 0, 1};
     static const unsigned char localhost_mapped[] = {
@@ -157,7 +161,7 @@ bool IsLoopback(const struct sockaddr *addr) {
 }
 
 #ifndef _WIN32
-static bool IsBridgeInterface(const std::string &name) {
+static bool IsBridgeInterface(const std::string& name) {
   std::string path = "/sys/class/net/" + name + "/bridge";
   struct stat st;
   return stat(path.c_str(), &st) == 0;
@@ -170,7 +174,7 @@ std::string ToString(mdns_string_t str) {
 }
 
 class MdnsClient {
-public:
+ public:
   MdnsClient();
 
   void Open();
@@ -184,11 +188,11 @@ public:
   std::vector<MdnsQueryResult> records() const;
 
   struct QueryResponseContext {
-    MdnsClient *client;
+    MdnsClient* client;
     int socket_index;
   };
 
-private:
+ private:
   std::vector<Socket> sockets_;
 
   std::vector<MdnsQueryResult> records_;
@@ -197,9 +201,9 @@ private:
 
   void OpenSockets_();
 
-  int QueryCallback_(const struct sockaddr *from, size_t addrlen,
+  int QueryCallback_(const struct sockaddr* from, size_t addrlen,
                      mdns_entry_type_t entry, uint16_t rtype, uint16_t rclass,
-                     uint32_t ttl, const void *data, size_t size,
+                     uint32_t ttl, const void* data, size_t size,
                      size_t name_offset, size_t record_offset,
                      size_t record_length, uint16_t socket_index);
 };
@@ -230,18 +234,20 @@ MdnsClient::~MdnsClient() {
   }
 }
 
-std::vector<MdnsQueryResult> MdnsClient::records() const { return records_; }
+std::vector<MdnsQueryResult> MdnsClient::records() const {
+  return records_;
+}
 
 void MdnsClient::OpenSockets_() {
 #ifdef _WIN32
-  IP_ADAPTER_ADDRESSES *adapter_address = 0;
+  IP_ADAPTER_ADDRESSES* adapter_address = 0;
 
   ULONG address_size = 15000;
   unsigned int ret;
   unsigned int num_retries = 3;
 
   do {
-    adapter_address = (IP_ADAPTER_ADDRESSES *)malloc(address_size);
+    adapter_address = (IP_ADAPTER_ADDRESSES*)malloc(address_size);
     ret = GetAdaptersAddresses(AF_UNSPEC,
                                GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_ANYCAST,
                                0, adapter_address, &address_size);
@@ -269,7 +275,7 @@ void MdnsClient::OpenSockets_() {
     // std::wcout << " friendly name: " << adapter->FriendlyName << std::endl;
     // std::cout << " addresses: " << std::endl;
 
-    for (IP_ADAPTER_UNICAST_ADDRESS *unicast = adapter->FirstUnicastAddress;
+    for (IP_ADAPTER_UNICAST_ADDRESS* unicast = adapter->FirstUnicastAddress;
          unicast; unicast = unicast->Next) {
       if (IsLoopback(unicast->Address.lpSockaddr))
         continue;
@@ -277,8 +283,8 @@ void MdnsClient::OpenSockets_() {
       std::string addr_str = "";
 
       if (unicast->Address.lpSockaddr->sa_family == AF_INET) {
-        struct sockaddr_in *saddr =
-            (struct sockaddr_in *)unicast->Address.lpSockaddr;
+        struct sockaddr_in* saddr =
+            (struct sockaddr_in*)unicast->Address.lpSockaddr;
 
         int sock = mdns_socket_open_ipv4(saddr);
 
@@ -300,8 +306,8 @@ void MdnsClient::OpenSockets_() {
         if (unicast->DadState != NldsPreferred)
           continue;
 
-        struct sockaddr_in6 *saddr =
-            (struct sockaddr_in6 *)unicast->Address.lpSockaddr;
+        struct sockaddr_in6* saddr =
+            (struct sockaddr_in6*)unicast->Address.lpSockaddr;
 
         saddr->sin6_port = 0;
         int sock = mdns_socket_open_ipv6(saddr);
@@ -327,8 +333,8 @@ void MdnsClient::OpenSockets_() {
     // std::cout << "\n";
   }
 #else
-  struct ifaddrs *ifaddr = 0;
-  struct ifaddrs *ifa = 0;
+  struct ifaddrs* ifaddr = 0;
+  struct ifaddrs* ifa = 0;
 
   if (getifaddrs(&ifaddr) < 0) {
     std::cerr << "Failed to get interface addresses!" << std::endl;
@@ -353,7 +359,7 @@ void MdnsClient::OpenSockets_() {
     info.name = ifa->ifa_name;
 
     if (ifa->ifa_addr->sa_family == AF_INET) {
-      struct sockaddr_in *saddr = (struct sockaddr_in *)ifa->ifa_addr;
+      struct sockaddr_in* saddr = (struct sockaddr_in*)ifa->ifa_addr;
       saddr->sin_port = 0;
       int sock = mdns_socket_open_ipv4(saddr);
 
@@ -367,7 +373,7 @@ void MdnsClient::OpenSockets_() {
       addr_str = ip_address_to_string(ifa->ifa_addr, saddr->sin_port,
                                       sizeof(sockaddr_in));
     } else if (ifa->ifa_addr->sa_family == AF_INET6) {
-      struct sockaddr_in6 *saddr = (struct sockaddr_in6 *)ifa->ifa_addr;
+      struct sockaddr_in6* saddr = (struct sockaddr_in6*)ifa->ifa_addr;
       saddr->sin6_port = 0;
       int sock = mdns_socket_open_ipv6(saddr);
 
@@ -381,7 +387,7 @@ void MdnsClient::OpenSockets_() {
       addr_str = ip_address_to_string(ifa->ifa_addr, saddr->sin6_port,
                                       sizeof(sockaddr_in6));
     } else {
-      continue; // ignore AF_PACKET
+      continue;  // ignore AF_PACKET
     }
 
     std::cout << "Adapter:\n";
@@ -393,9 +399,9 @@ void MdnsClient::OpenSockets_() {
 #endif
 }
 
-int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
+int MdnsClient::QueryCallback_(const struct sockaddr* from, size_t addrlen,
                                mdns_entry_type_t entry, uint16_t rtype,
-                               uint16_t rclass, uint32_t ttl, const void *data,
+                               uint16_t rclass, uint32_t ttl, const void* data,
                                size_t size, size_t name_offset,
                                size_t record_offset, size_t record_length,
                                uint16_t socket_index) {
@@ -418,7 +424,7 @@ int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
 
   int scope_id = 0;
   if (from->sa_family == AF_INET6) {
-    struct sockaddr_in6 *saddr = (struct sockaddr_in6 *)from;
+    struct sockaddr_in6* saddr = (struct sockaddr_in6*)from;
     scope_id = saddr->sin6_scope_id;
   }
 
@@ -447,7 +453,7 @@ int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
     struct sockaddr_in addr;
     mdns_record_parse_a(data, size, record_offset, record_length, &addr);
     std::string addr_str =
-        ip_address_to_string((sockaddr *)&addr, 0, sizeof(addr));
+        ip_address_to_string((sockaddr*)&addr, 0, sizeof(addr));
 
     MdnsAResult result;
     result.addr = addr_str;
@@ -457,7 +463,7 @@ int MdnsClient::QueryCallback_(const struct sockaddr *from, size_t addrlen,
     mdns_record_parse_aaaa(data, size, record_offset, record_length, &addr);
     // Include the adapter index for the case of ipv6ll
     std::string addr_str = ip_address_to_string(
-        (sockaddr *)&addr, 0, sizeof(addr), sock.adapter.index);
+        (sockaddr*)&addr, 0, sizeof(addr), sock.adapter.index);
 
     MdnsAAAAResult result;
     result.addr = addr_str;
@@ -534,20 +540,20 @@ void MdnsClient::SendQuery(std::string service) {
 
           int records = mdns_query_recv(
               sockets_[i].isock, buffer.data(), buffer.size(),
-              [](int sock, const struct sockaddr *from, size_t addrlen,
+              [](int sock, const struct sockaddr* from, size_t addrlen,
                  mdns_entry_type_t entry, uint16_t query_id, uint16_t rtype,
-                 uint16_t rclass, uint32_t ttl, const void *data, size_t size,
+                 uint16_t rclass, uint32_t ttl, const void* data, size_t size,
                  size_t name_offset, size_t name_length, size_t record_offset,
-                 size_t record_length, void *user_data) -> int {
-                QueryResponseContext *ctx =
-                    static_cast<QueryResponseContext *>(user_data);
+                 size_t record_length, void* user_data) -> int {
+                QueryResponseContext* ctx =
+                    static_cast<QueryResponseContext*>(user_data);
                 ctx->client->QueryCallback_(from, addrlen, entry, rtype, rclass,
                                             ttl, data, size, name_offset,
                                             record_offset, record_length,
                                             ctx->socket_index);
                 return 0;
               },
-              (void *)&ctx, query_ids[i]);
+              (void*)&ctx, query_ids[i]);
           total_records += records;
           // std::cout << "Received " << records
           //           << " records for interface: " << sockets_[i].adapter.name
@@ -559,3 +565,6 @@ void MdnsClient::SendQuery(std::string service) {
   } while (res > 0);
   // std::cout << std::endl;
 }
+}  // namespace dwe
+
+#endif
