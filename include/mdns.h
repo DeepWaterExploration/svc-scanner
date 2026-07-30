@@ -339,7 +339,7 @@ static inline size_t
 mdns_string_find(const char* str, size_t length, char c, size_t offset);
 
 //! Compare if two strings are equal. If the strings are equal it returns >0 and the offset variables are
-//! updated to the end of the corresponding strings. If the strings are not equal it returns 0 and 
+//! updated to the end of the corresponding strings. If the strings are not equal it returns 0 and
 //! the offset variables are NOT updated.
 static inline int
 mdns_string_equal(const void* buffer_lhs, size_t size_lhs, size_t* ofs_lhs, const void* buffer_rhs,
@@ -490,7 +490,8 @@ mdns_socket_setup_ipv6(int sock, const struct sockaddr_in6* saddr) {
 #endif
 	} else {
 		memcpy(&sock_addr, saddr, sizeof(struct sockaddr_in6));
-		unsigned int ifindex = 0;
+		// unsigned int ifindex = 0;
+	    unsigned int ifindex = saddr->sin6_scope_id; // @brandonhs: fix bug with mjansson/mdns that ignores scope id
 		setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_IF, (const char*)&ifindex, sizeof(ifindex));
 #ifndef _WIN32
 		sock_addr.sin6_addr = in6addr_any;
