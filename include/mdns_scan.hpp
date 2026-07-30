@@ -298,6 +298,8 @@ void MdnsClient::OpenSockets_() {
           socket_info.isock = sock;
           socket_info.adapter = info;
           sockets_.push_back(socket_info);
+        } else {
+          std::cerr << "Failed to create socket: " << addr_str << std::endl;
         }
 
         addr_str = ip_address_to_string(unicast->Address.lpSockaddr,
@@ -308,6 +310,7 @@ void MdnsClient::OpenSockets_() {
 
         struct sockaddr_in6* saddr =
             (struct sockaddr_in6*)unicast->Address.lpSockaddr;
+        // TODO: Fix scope_id bug on windows
 
         saddr->sin6_port = 0;
         int sock = mdns_socket_open_ipv6(saddr);
@@ -322,6 +325,8 @@ void MdnsClient::OpenSockets_() {
           socket_info.isock = sock;
           socket_info.adapter = info;
           sockets_.push_back(socket_info);
+        } else {
+          std::cerr << "Failed to create socket: " << addr_str << std::endl;
         }
 
         addr_str = ip_address_to_string(unicast->Address.lpSockaddr,
@@ -368,6 +373,8 @@ void MdnsClient::OpenSockets_() {
         socket_info.isock = sock;
         socket_info.adapter = info;
         sockets_.push_back(socket_info);
+      } else {
+        std::cerr << "Failed to create socket: " << addr_str << std::endl;
       }
 
       addr_str = ip_address_to_string(ifa->ifa_addr, saddr->sin_port,
@@ -375,6 +382,15 @@ void MdnsClient::OpenSockets_() {
     } else if (ifa->ifa_addr->sa_family == AF_INET6) {
       struct sockaddr_in6* saddr = (struct sockaddr_in6*)ifa->ifa_addr;
       saddr->sin6_port = 0;
+
+      // Assign scope id, if it's required
+      if (!saddr->sin6_scope_id && IsIpV6LL(saddr)) {
+        saddr->sin6_scope_id = info.index;
+      }
+
+      addr_str = ip_address_to_string(ifa->ifa_addr, saddr->sin6_port,
+                                      sizeof(sockaddr_in6));
+
       int sock = mdns_socket_open_ipv6(saddr);
 
       if (sock >= 0) {
@@ -382,19 +398,18 @@ void MdnsClient::OpenSockets_() {
         socket_info.isock = sock;
         socket_info.adapter = info;
         sockets_.push_back(socket_info);
+      } else {
+        std::cerr << "Failed to create socket: " << addr_str << std::endl;
       }
-
-      addr_str = ip_address_to_string(ifa->ifa_addr, saddr->sin6_port,
-                                      sizeof(sockaddr_in6));
     } else {
       continue;  // ignore AF_PACKET
     }
 
-    std::cout << "Adapter:\n";
-    std::wcout << " friendly name: " << ifa->ifa_name << std::endl;
-    std::cout << " - " << addr_str << std::endl;
+    // std::cout << "Adapter:\n";
+    // std::wcout << " friendly name: " << ifa->ifa_name << std::endl;
+    // std::cout << " - " << addr_str << std::endl;
   }
-  std::cout << "\n";
+  // std::cout << "\n";
 
 #endif
 }
@@ -499,7 +514,6 @@ void MdnsClient::SendQuery(std::string service) {
 
   std::vector<uint8_t> buffer(2048);
 
-  int nfds = 0;
   size_t total_records = 0;
 
   for (int i = 0; i < sockets_.size(); i++) {
