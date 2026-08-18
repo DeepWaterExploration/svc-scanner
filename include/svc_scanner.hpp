@@ -4,7 +4,7 @@
 #include <optional>
 #include "mdns_scan.hpp"
 
-namespace dwe {
+namespace dwd {
 
 enum class IpType { IP4, IP6 };
 

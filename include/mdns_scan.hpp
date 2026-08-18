@@ -30,7 +30,7 @@
 #include <variant>
 #include <vector>
 
-namespace dwe {
+namespace dwd {
 // Equivalent of mdns_query_t using std::string
 struct MdnsQuery {
   mdns_record_type_t type;
