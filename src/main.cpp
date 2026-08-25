@@ -4,7 +4,7 @@
 #include "mdns_scan.hpp"
 #include "svc_scanner.hpp"
 
-using namespace dwe;
+using namespace dwd;
 
 int main(int argc, char** argv) {
 #ifdef _WIN32

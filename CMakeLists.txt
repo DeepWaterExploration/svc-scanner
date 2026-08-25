@@ -3,12 +3,14 @@ project(svc-scanner LANGUAGES CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS "on")
 
-add_library(${PROJECT_NAME} INTERFACE)
+set(CPP_SOURCES src/main.cpp)
 
-target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_17)
-target_include_directories(${PROJECT_NAME} INTERFACE include)
+add_executable(svc-scanner ${CPP_SOURCES})
+
+target_compile_features(svc-scanner PRIVATE cxx_std_17)
+target_include_directories(svc-scanner PRIVATE include)
 
 IF (WIN32)
-  target_link_libraries(${PROJECT_NAME} INTERFACE ws2_32 iphlpapi)
+  target_link_libraries(svc-scanner ws2_32 iphlpapi)
 ELSE()
 ENDIF()
